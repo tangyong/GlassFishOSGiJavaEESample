@@ -18,17 +18,17 @@ import tangyong.wab.sample.core.Module;
 public class ApplicationBean {
 
     @Inject
-    private ServiceTracker st;
-    @Inject
     private BundleContext bc;
+    
     @Inject
     private ModuleListener moduleListener;
+    
     private List<Module> modules = new ArrayList<Module>();
 
     @Inject
     public void initialize(ServiceTracker st) {
         bc.addServiceListener(moduleListener);        
-        loadServices();
+        loadServices(st);
     }
 
    public void afterAddModule(Module module) {
@@ -45,7 +45,7 @@ public class ApplicationBean {
         return modules;
     }
 
-    private void loadServices() {
+    private void loadServices(ServiceTracker st) {
         ServiceReference[] srs = st.getServiceReferences();
         if (srs != null) {
             for (ServiceReference sr : srs) {

@@ -29,5 +29,4 @@ public class Module1 implements Module{
 	public URL getResource(String path) {
 		return bc.getBundle().getEntry(path);
 	}
-
 }

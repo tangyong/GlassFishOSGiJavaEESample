@@ -1,7 +1,3 @@
-/*
- * To change this template, choose Tools | Templates
- * and open the template in the editor.
- */
 package tangyong.wab.sample.web.cdi;
 
 import java.net.URL;
@@ -33,7 +29,7 @@ public class Util {
         return null;
     }
 
-    public static <T> T getBean(Class clazz) {
+    public static <T> T getBean(Class<?> clazz) {
         BeanManager bm = getBeanManager();
         Bean<T> bean = (Bean<T>) bm.getBeans(clazz).iterator().next();
         CreationalContext<T> ctx = bm.createCreationalContext(bean);
