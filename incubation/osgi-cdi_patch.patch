@@ -1,0 +1,158 @@
+Index: pom.xml
+===================================================================
+--- pom.xml	(revision 62681)
++++ pom.xml	(working copy)
+@@ -130,5 +130,40 @@
+             <version>1.0.0</version>
+             <scope>provided</scope>
+         </dependency>
++        <dependency>
++            <groupId>org.jboss.weld</groupId>
++            <artifactId>weld-osgi-bundle</artifactId>
++            <version>2.0.3.Final</version>
++            <exclusions>
++                <exclusion>
++                    <groupId>org.jboss.weld</groupId>
++                    <artifactId>weld-api</artifactId>
++                </exclusion>
++                <exclusion>
++                    <groupId>org.jboss.weld</groupId>
++                    <artifactId>weld-core</artifactId>
++                </exclusion>
++                <exclusion>
++                    <groupId>org.jboss.weld</groupId>
++                    <artifactId>weld-logging</artifactId>
++                </exclusion>
++                <exclusion>
++                    <groupId>org.jboss.weld</groupId>
++                    <artifactId>weld-spi</artifactId>
++                </exclusion>
++                <exclusion>
++                    <groupId>javax.enterprise</groupId>
++                    <artifactId>cdi-api</artifactId>
++                </exclusion>
++                <exclusion>
++                    <groupId>javassist</groupId>
++                    <artifactId>javassist</artifactId>
++                </exclusion>
++                <exclusion>
++                    <groupId>com.google.collections</groupId>
++                    <artifactId>google-collections</artifactId>
++                </exclusion>
++            </exclusions>
++        </dependency>
+     </dependencies>
+ </project>
+Index: src/main/java/org/glassfish/osgicdi/impl/OSGiServiceExtension.java
+===================================================================
+--- src/main/java/org/glassfish/osgicdi/impl/OSGiServiceExtension.java	(revision 62681)
++++ src/main/java/org/glassfish/osgicdi/impl/OSGiServiceExtension.java	(working copy)
+@@ -60,19 +60,25 @@
+ import javax.enterprise.inject.CreationException;
+ import javax.enterprise.inject.Default;
+ import javax.enterprise.inject.spi.AfterBeanDiscovery;
++import javax.enterprise.inject.spi.AfterDeploymentValidation;
+ import javax.enterprise.inject.spi.Bean;
++import javax.enterprise.inject.spi.BeanManager;
+ import javax.enterprise.inject.spi.BeforeBeanDiscovery;
+ import javax.enterprise.inject.spi.Extension;
+ import javax.enterprise.inject.spi.InjectionPoint;
+-import javax.enterprise.inject.spi.ProcessAnnotatedType;
+ import javax.enterprise.inject.spi.ProcessBean;
+ import javax.enterprise.inject.spi.ProcessInjectionTarget;
+ import javax.enterprise.util.AnnotationLiteral;
+ 
++import org.osgi.framework.BundleContext;
++import org.osgi.framework.BundleReference;
++import org.osgi.framework.InvalidSyntaxException;
+ import org.osgi.framework.ServiceException;
+-
++import org.osgi.framework.ServiceReference;
++import org.glassfish.osgicdi.DynamicBean;
+ import org.glassfish.osgicdi.OSGiService;
+ import org.glassfish.osgicdi.ServiceUnavailableException;
++import org.jboss.weld.manager.BeanManagerImpl;
+ 
+ /**
+  * A portable extension that supports discovery and injection of OSGi
+@@ -90,6 +96,10 @@
+      */
+     private HashMap<Type, Set<InjectionPoint>> servicesToBeInjected
+                                 = new HashMap<Type, Set<InjectionPoint>>();
++    
++    //Used for storing Dynamic Beans
++    private List<Bean<?>> dynamicBeans = new ArrayList<Bean<?>>();
++    
+     private static Logger logger = Logger.getLogger(OSGiServiceExtension.class.getPackage().getName());
+ 
+     //Observers for container lifecycle events
+@@ -121,6 +131,14 @@
+      */
+     void afterProcessBean(@Observes ProcessBean pb){
+         debug("afterProcessBean - " + pb.getAnnotated().getBaseType());
++        
++        //Finding Dynamic Bean
++        Bean<?> bean = pb.getBean();
++        Class<?> clazz = bean.getBeanClass();
++        if (clazz.isAnnotationPresent(DynamicBean.class)){
++        	dynamicBeans.add(bean);
++        }
++        
+         Set<InjectionPoint> ips = pb.getBean().getInjectionPoints();
+         discoverServiceInjectionPoints(ips);
+     }
+@@ -243,6 +261,54 @@
+         }
+     }
+     
++    //if having any dynamic bean, we will add these beans into host wab's bean manager
++    void afterDeploymentValidation(@Observes AfterDeploymentValidation adv){
++    	if ( dynamicBeans.isEmpty() ){
++    		return;
++    	}
++    	
++    	for(Bean<?> bean : dynamicBeans){
++    		Class<?> clazz = bean.getBeanClass();
++    		DynamicBean dbAnnotation = clazz.getAnnotation(DynamicBean.class);
++    		String hostWABContextPath = dbAnnotation.hostContextPath();
++    		
++    		if (! hostWABContextPath.isEmpty() ){
++    			ServiceReference[] references = null;
++    			BundleContext ctx = getBundleContext();
++				String serviceFilter = "(DynamicJavaEE-ContextPath=" + hostWABContextPath +")";
++				try {
++					references = ctx.getServiceReferences(BeanManager.class.getName(), serviceFilter);
++					if (references != null){
++						Object obj = ctx.getService(references[0]);
++						BeanManager bm = null;  
++			    		if ( obj != null && obj instanceof BeanManager){
++			    			bm = (BeanManager) obj;
++			    			
++			    			//urgly way 
++			    			((BeanManagerImpl)bm).addBean(bean);
++			    		}
++					}
++				} catch (InvalidSyntaxException e) {
++					// TODO Auto-generated catch block
++					e.printStackTrace();
++				}
++    		}
++    	}
++    }
++    
++    private static BundleContext getBundleContext() {
++        BundleContext bc = null;
++        try {
++            bc = BundleReference.class
++                            .cast(OSGiServiceExtension.class.getClassLoader())
++                            .getBundle().getBundleContext();
++        } catch (ClassCastException cce) {
++            throw cce;
++        }
++        
++        return bc;
++    }
++    
+ 
+     /*
+      * A <code>Bean</code> class that represents an OSGi Service 

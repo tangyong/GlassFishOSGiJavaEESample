@@ -1,0 +1,38 @@
+Steps:
+1. Applying Patches
+putting/overriding the following from attachments into modules/autostart/ directory
+
+1)osgi-cdi.jar
+2)osgi-web-container.jar
+
+2. Deploying the sample app from attachment(glassfish.wab.sample.zip)
+
+1) asadmin deploy --type=osgi glassfish.wab.sample.core.jar
+2) asadmin deploy --type=osgi glassfish.wab.sample.web.war
+3) accessing "http://localhost:8080/wabsample/"
+
+No any module available
+
+4) asadmin deploy --type=osgi glassfish.wab.sample.module2.war
+5) accessing "http://localhost:8080/wabsample/" again
+
+Module2 should be displayed, and clicks "MODULE_2" link, and inputs any
+text in inputbox, then, greeting page will be displayed correctly.
+
+6) asadmin deploy --type=osgi glassfish.wab.sample.module3.war
+7) accessing "http://localhost:8080/wabsample/" again
+
+Module3 should be displayed too, and clicks "MODULE_3" link, and inputs
+any text in inputbox, then, greeting page will be displayed correctly too.
+
+[Feature to be implemented or Bug]
+There is a critical bug in the prototype as following:
+
+If I undeploy module2 or module3 and re-deploy module2 or module3, then,
+while clicks "MODULE_2" link, error will happen. This is because after
+undeploying module2, needing to remove beans related to module2 from
+host wab's BeanManager.
+
+[About the patch's implementation]
+1) osgi-cdi_patch
+2) osgi-web-container_patch

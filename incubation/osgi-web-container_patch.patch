@@ -1,0 +1,258 @@
+Index: pom.xml
+===================================================================
+--- pom.xml	(revision 62550)
++++ pom.xml	(working copy)
+@@ -102,6 +102,11 @@
+             <groupId>org.osgi</groupId>
+             <artifactId>org.osgi.enterprise</artifactId>
+         </dependency>
++        <dependency>
++            <groupId>org.glassfish.main.web</groupId>
++            <artifactId>weld-integration</artifactId>
++            <version>4.0</version>
++        </dependency>
+     </dependencies>
+ 
+ </project>
+Index: src/main/java/org/glassfish/osgiweb/Constants.java
+===================================================================
+--- src/main/java/org/glassfish/osgiweb/Constants.java	(revision 62550)
++++ src/main/java/org/glassfish/osgiweb/Constants.java	(working copy)
+@@ -52,6 +52,8 @@
+     public static final String OSGI_WEB_SYMBOLIC_NAME = "osgi.web.symbolicname";
+     public static final String OSGI_WEB_VERSION = "osgi.web.version";
+     public static final String OSGI_WEB_CONTEXTPATH= "osgi.web.contextpath";
++    public static final String DYNAMIC_JAVAEE_ENABLED= "DynamicJavaEE-Enabled";
++    public static final String DYNAMIC_JAVAEE_CONTEXTPATH= "DynamicJavaEE-ContextPath";
+ 
+     // constants related to integration with event admin service
+     public static final String EVENT_TOPIC_DEPLOYING = "org/osgi/service/web/DEPLOYING";
+Index: src/main/java/org/glassfish/osgiweb/OSGiWebDeploymentContext.java
+===================================================================
+--- src/main/java/org/glassfish/osgiweb/OSGiWebDeploymentContext.java	(revision 62550)
++++ src/main/java/org/glassfish/osgiweb/OSGiWebDeploymentContext.java	(working copy)
+@@ -53,6 +53,8 @@
+ import org.glassfish.api.deployment.archive.ReadableArchive;
+ import org.glassfish.api.deployment.OpsParams;
+ import org.osgi.framework.*;
++import org.osgi.util.tracker.BundleTracker;
++import org.osgi.util.tracker.BundleTrackerCustomizer;
+ 
+ import java.io.FileFilter;
+ import java.io.InputStream;
+@@ -81,6 +83,10 @@
+ 
+     private static final Logger logger =
+             Logger.getLogger(OSGiWebDeploymentContext.class.getPackage().getName());
++    
++    //TangYong 2013/09/5
++    private BundleTracker tracker;
++    private Bundle dynamicBeanBundle;
+ 
+     public OSGiWebDeploymentContext(ActionReport actionReport,
+                                             Logger logger,
+@@ -118,8 +124,48 @@
+                 return javax.enterprise.deploy.shared.ModuleType.WAR.toString(); // WarType.ARCHIVE_TYPE;
+             }
+         });
++        
++        //TangYong 2013/09/05
++        tracker = new BundleTracker(this.bundle.getBundleContext(), Bundle.ACTIVE , new DynamicBeanBundleTrackerCustomizer());
++        tracker.open();
+     }
++    
++    private class DynamicBeanBundleTrackerCustomizer implements BundleTrackerCustomizer {
+ 
++		@Override
++		public Object addingBundle(final Bundle b, BundleEvent event) {			
++			if ( isDynamicBeanBundle(b) && 
++					           (bundle.getBundleId() != b.getBundleId() &&
++					                  (bundle.getHeaders().get(Constants.WEB_CONTEXT_PATH).toString().equalsIgnoreCase(
++					                		  b.getHeaders().get(Constants.DYNAMIC_JAVAEE_CONTEXTPATH).toString())))){
++				dynamicBeanBundle = b;
++				if (finalClassLoader != null){
++					((WABClassLoader)finalClassLoader).setDynamicBeanBundleCLS(dynamicBeanBundle);
++				}
++				
++				return b;
++			}
++			
++            return null;
++		}
++		
++		private boolean isDynamicBeanBundle(Bundle b){
++			 final Dictionary<?, ?> headers = b.getHeaders();
++		        Object obj = headers.get(Constants.DYNAMIC_JAVAEE_CONTEXTPATH);
++		        return obj != null ;
++		}
++
++		@Override
++		public void modifiedBundle(Bundle bundle, BundleEvent event,
++				Object object) {
++		}
++
++		@Override
++		public void removedBundle(Bundle bundle, BundleEvent event,
++				Object object) {	
++		}	
++    }
++
+     protected void setupClassLoader() throws Exception     {
+         finalClassLoader = new WABClassLoader(null);
+         shareableTempClassLoader = finalClassLoader;
+@@ -147,6 +193,9 @@
+         final BundleClassLoader delegate1 = new BundleClassLoader(bundle);
+         final ClassLoader delegate2 =
+                 Globals.get(ClassLoaderHierarchy.class).getAPIClassLoader();
++        
++        //TangYong 2013/09/6
++        Set<BundleClassLoader> delegate3 = null;
+ 
+         @Override
+         public Class<?> loadClass(String name) throws ClassNotFoundException {
+@@ -167,9 +216,31 @@
+             try {
+                 return delegate1.loadClass(name, resolve);
+             } catch (ClassNotFoundException cnfe) {
+-                return delegate2.loadClass(name);
++            	try{
++            		return delegate2.loadClass(name);
++            	}catch (ClassNotFoundException cnfe1) {
++            		if (delegate3 != null){
++            			for (BundleClassLoader bcl : delegate3){
++            				try{
++            					return bcl.loadClass(name);
++            				}catch(ClassNotFoundException cnfe2){
++            					continue;
++            				}
++            			}
++            		}
++            		
++                    throw cnfe1;
++                }                
+             }
+         }
++        
++        public void setDynamicBeanBundleCLS(Bundle bundle){
++        	if (delegate3 == null){
++        		delegate3 = new HashSet<BundleClassLoader>();
++        	}
++        	
++        	delegate3.add(new BundleClassLoader(bundle));
++        }
+ 
+         @Override
+         public URL getResource(String name)
+Index: src/main/java/org/glassfish/osgiweb/OSGiWebDeploymentRequest.java
+===================================================================
+--- src/main/java/org/glassfish/osgiweb/OSGiWebDeploymentRequest.java	(revision 62550)
++++ src/main/java/org/glassfish/osgiweb/OSGiWebDeploymentRequest.java	(working copy)
+@@ -42,6 +42,10 @@
+ 
+ import com.sun.enterprise.config.serverbeans.VirtualServer;
+ import com.sun.enterprise.web.*;
++import com.sun.enterprise.deployment.Application;
++
++import org.glassfish.embeddable.GlassFish;
++import org.glassfish.embeddable.GlassFishException;
+ import org.glassfish.internal.data.ApplicationInfo;
+ import org.glassfish.internal.data.EngineRef;
+ import org.glassfish.internal.data.ModuleInfo;
+@@ -54,8 +58,11 @@
+ import org.glassfish.api.deployment.OpsParams;
+ import org.glassfish.api.deployment.DeployCommandParameters;
+ import org.glassfish.server.ServerEnvironmentImpl;
++import org.glassfish.weld.WeldDeployer;
+ import org.glassfish.internal.deployment.Deployment;
+ import org.glassfish.internal.api.Globals;
++import org.jboss.weld.bootstrap.WeldBootstrap;
++import org.jboss.weld.bootstrap.spi.BeanDeploymentArchive;
+ import org.osgi.framework.*;
+ 
+ import java.lang.reflect.InvocationTargetException;
+@@ -66,9 +73,13 @@
+ import java.io.IOException;
+ 
+ import com.sun.enterprise.deploy.shared.ArchiveFactory;
++import com.sun.enterprise.deployment.BundleDescriptor;
++import com.sun.enterprise.deployment.WebBundleDescriptor;
+ import com.sun.enterprise.config.serverbeans.*;
++
+ import org.osgi.service.packageadmin.PackageAdmin;
+ 
++import javax.enterprise.inject.spi.BeanManager;
+ import javax.servlet.ServletContext;
+ 
+ import static org.glassfish.osgiweb.Constants.*;
+@@ -249,6 +260,51 @@
+ 
+         try {
+             ServiceRegistration scReg = registerService(osgiAppInfo.getBundle(), sc);
++            
++            //if the web application bundle(WAB) enables Dynamic JavaEE feature
++            if ( isDynamicJavaEEEnabled(osgiAppInfo.getBundle()) ){
++            	//Finding Current WAB related Bean Manager
++                ApplicationInfo appInfo = osgiAppInfo.getAppInfo();
++                WeldBootstrap bootstrap = appInfo.getTransientAppMetaData("org.glassfish.weld.WeldBootstrap",
++                        WeldBootstrap.class);
++                if( bootstrap != null ){
++                	Application app = appInfo.getMetaData(Application.class);
++                	BundleDescriptor webBD = null;
++                	if( app != null ){
++                		for(BundleDescriptor next : app.getBundleDescriptors()) {
++                            if( next instanceof WebBundleDescriptor ) {
++                            	webBD = next;
++                            	break;
++                            }
++                        }
++                	}
++                	if (webBD != null){
++                		BundleContext ctx = BundleReference.class.cast(getClass().getClassLoader()).getBundle().getBundleContext();
++                		GlassFish gf = (GlassFish) ctx.getService(ctx.getServiceReference(GlassFish.class.getName()));
++                		WeldDeployer weldDeployer = null;
++    					try {
++    						weldDeployer = gf.getService(WeldDeployer.class);
++    					} catch (GlassFishException e) {
++    						// TODO Auto-generated catch block
++    						e.printStackTrace();
++    					}
++                		if (weldDeployer != null){
++                			BeanDeploymentArchive bda = weldDeployer.getBeanDeploymentArchiveForBundle(webBD);
++                			BeanManager beanManager = bootstrap.getManager(bda);
++                			if (beanManager != null){
++                				//Registering the beanManager into OSGi Registry
++                				Properties props = new Properties();
++                			    props.setProperty(Constants.DYNAMIC_JAVAEE_CONTEXTPATH, osgiAppInfo.getBundle().getHeaders().
++                			    		                                        get(Constants.WEB_CONTEXT_PATH).toString());
++                			    ServiceRegistration scReg1 = ctx.registerService(
++                			    		                         BeanManager.class.getName(), beanManager, props);
++                			   //TODO(TangYong): needing to consider how to unregister scReg1 in the future 
++                			}
++                		}
++                	}
++                }	
++            }
++                        
+             // TODO(Sahoo): Unregister scReg when we go down
+         } catch (IllegalStateException e) {
+             // See issue #15398 as to why this can happen
+@@ -257,6 +313,19 @@
+                             " because of following exception:", e);
+         }
+     }
++    
++    /**
++     * Determines if the web application bundle(WAB) enables Dynamic JavaEE feature.
++     *
++     * @param b
++     * @return
++     */
++    private boolean isDynamicJavaEEEnabled(Bundle b)
++    {
++        final Dictionary headers = b.getHeaders();
++        Object obj = headers.get(Constants.DYNAMIC_JAVAEE_ENABLED);
++        return obj != null && "TRUE".equalsIgnoreCase(obj.toString());
++    }
+ 
+     private ServletContext getServletContext(ApplicationInfo appInfo)
+     {
